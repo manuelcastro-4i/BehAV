@@ -1,0 +1,51 @@
+# BehAV Planner Parameters Configuration
+# This file contains all configurable parameters for the BehAV navigation system
+
+behav_planner:
+  ros__parameters:
+    # Goal parameters (ego-polar coordinates)
+    goal_radius: 5.0        # Distance to goal in meters
+    goal_theta: 0.0         # Heading angle to goal in degrees (left is positive)
+    goal_delta: 0.0         # Final pose angle in degrees
+
+    # Motor control
+    publish_to_motors: true  # Whether to publish velocity commands
+
+    # Ghost Robotics specific (disable for Go2)
+    enable_ghost_init: false
+
+    # Control law parameters
+    k1: 1.2                 # Pose-following gain (0 = pure waypoint following)
+    k2: 1.0                 # Delta convergence gain
+    beta: 0.4               # Velocity reduction factor
+    lambda_val: 2.0         # Curvature penalty exponent
+    v_max: 0.8              # Maximum linear velocity (m/s)
+    v_min: 0.0              # Minimum linear velocity (m/s)
+    r_thresh: 0.05          # Goal reach threshold (m)
+
+    # Camera intrinsic parameters (Go2 simulation defaults)
+    camera_fx: 554.25       # Focal length X
+    camera_fy: 554.25       # Focal length Y
+    camera_cx: 320.0        # Principal point X
+    camera_cy: 240.0        # Principal point Y
+    camera_height: 0.35     # Camera height from ground (m)
+    camera_tilt_angle: 0.0  # Camera tilt in degrees (negative = downward)
+    camera_offset_x: 0.0    # Camera X offset from robot center (m)
+    camera_offset_y: 0.0    # Camera Y offset from robot center (m)
+
+landmark_detector:
+  ros__parameters:
+    # FastSAM model path
+    fastsam_model_path: "/app/models/FastSAM-x.pt"
+
+    # Ground truth image for landmark matching
+    ground_truth_image_path: "/app/landmark-tracking/Images/Iribe/2.jpg"
+
+    # Image topic to subscribe to
+    image_topic: "/robot1/camera/image_raw"
+
+    # Output directory for image plots
+    save_image_plot_dir: "/app/output/Image_plots/"
+
+    # Processing timer period (seconds)
+    timer_period: 10.0

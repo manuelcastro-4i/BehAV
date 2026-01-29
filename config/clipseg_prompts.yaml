@@ -1,0 +1,41 @@
+# CLIPSeg Behavioral Segmentation Prompts
+# Define prompts and their associated cost values for behavioral navigation
+#
+# Cost values: 0.0 = strongly avoid, 1.0 = strongly prefer
+# The planner will generate trajectories that minimize cost (prefer lower values)
+
+prompts:
+  # Default outdoor navigation prompts
+  outdoor:
+    - prompt: "vegetation"
+      cost: 0.05       # Avoid vegetation
+    - prompt: "Pavement"
+      cost: 0.95       # Strongly prefer pavement
+    - prompt: "grass"
+      cost: 0.48       # Slightly avoid grass
+    - prompt: "Stop gesture"
+      cost: 0.0        # Always stop for stop gestures
+
+  # Indoor navigation prompts
+  indoor:
+    - prompt: "floor"
+      cost: 0.95       # Prefer floor
+    - prompt: "furniture"
+      cost: 0.1        # Avoid furniture
+    - prompt: "walls"
+      cost: 0.05       # Avoid walls
+    - prompt: "doorway"
+      cost: 0.8        # Prefer doorways
+
+  # Campus navigation prompts
+  campus:
+    - prompt: "sidewalk"
+      cost: 0.95       # Strongly prefer sidewalks
+    - prompt: "road"
+      cost: 0.3        # Avoid roads
+    - prompt: "grass"
+      cost: 0.4        # Somewhat avoid grass
+    - prompt: "building"
+      cost: 0.05       # Avoid buildings
+    - prompt: "pedestrian"
+      cost: 0.0        # Stop for pedestrians

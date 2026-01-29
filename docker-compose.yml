@@ -1,0 +1,118 @@
+version: '3.8'
+
+services:
+  # Go2 Robot Simulator with Gazebo
+  go2_sim:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.go2_sim
+    container_name: go2_simulator
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - QT_X11_NO_MITSHM=1
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-~/.Xauthority}:/root/.Xauthority:ro
+    networks:
+      - ros2_net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, graphics, compute, utility]
+    stdin_open: true
+    tty: true
+    # Healthcheck to verify simulator is ready
+    healthcheck:
+      test: ["CMD", "ros2", "topic", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # BehAV Navigation Planner
+  behav:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.behav
+    container_name: behav_planner
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - DISPLAY=${DISPLAY:-:0}
+    volumes:
+      - ./models:/app/models:ro
+      - ./config:/app/config:ro
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    depends_on:
+      go2_sim:
+        condition: service_healthy
+    networks:
+      - ros2_net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, compute, utility]
+    # BehAV planner with topic remapping for Go2 simulator
+    command: >
+      python3 /app/planning/behav-planner.py
+      --ros-args
+      -p goal_radius:=5.0
+      -p goal_theta:=0.0
+      -p goal_delta:=0.0
+      -p publish_to_motors:=true
+      -p camera_fx:=554.25
+      -p camera_fy:=554.25
+      -p camera_cx:=320.0
+      -p camera_cy:=240.0
+      -p camera_height:=0.35
+      --remap /odom_lidar:=/robot1/odom
+      --remap /camera/color/image_raw:=/robot1/camera/image_raw
+      --remap /mcu/command/manual_twist:=/robot1/cmd_vel
+      --remap /scan:=/robot1/scan
+
+  # Landmark Detector (optional, run separately)
+  landmark_detector:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.behav
+    container_name: landmark_detector
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+    volumes:
+      - ./models:/app/models:ro
+      - ./config:/app/config:ro
+      - ./landmark-tracking/Images:/app/landmark-tracking/Images:ro
+    depends_on:
+      go2_sim:
+        condition: service_healthy
+    networks:
+      - ros2_net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, compute, utility]
+    profiles:
+      - landmark  # Only starts with --profile landmark
+    command: >
+      python3 /app/landmark-tracking/landmark_detector_ROS2.py
+      --ros-args
+      -p fastsam_model_path:=/app/models/FastSAM-x.pt
+      -p image_topic:=/robot1/camera/image_raw
+
+networks:
+  ros2_net:
+    driver: bridge

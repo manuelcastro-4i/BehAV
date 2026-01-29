@@ -1,0 +1,7 @@
+# This directory stores pre-trained model weights
+# Download FastSAM-x.pt (~200MB) from:
+# https://github.com/CASIA-IVA-Lab/FastSAM
+#
+# Place the file here as: FastSAM-x.pt
+#
+# CLIPSeg models are downloaded automatically from HuggingFace on first run.

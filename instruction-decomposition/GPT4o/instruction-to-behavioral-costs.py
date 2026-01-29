@@ -1,13 +1,26 @@
 #Code to breakdown a given language instrcution and output behavioral costs for behavioral targets
 
-#Inputs: Navigation instrcutions 
+#Inputs: Navigation instrcutions
 #Outputs: Landmarks, Navigation actions, Behaavioral Targets, Behavioral Actions, Behavioral Costs as lists
 
 from openai import OpenAI
 import numpy as np
 import ast
+import os
 
-client = OpenAI(api_key='') #ADD YOUR API KEY HERE
+
+def get_openai_client():
+    """Get OpenAI client using API key from environment variable."""
+    api_key = os.environ.get('OPENAI_API_KEY')
+    if not api_key:
+        raise ValueError(
+            "OPENAI_API_KEY environment variable not set. "
+            "Please set it with: export OPENAI_API_KEY=your-key-here"
+        )
+    return OpenAI(api_key=api_key)
+
+
+client = get_openai_client()
 
 def get_instruction_breakdown(language_instruction):
 

@@ -8,39 +8,64 @@ import time
 import numpy as np
 import cv2
 import io
-import os 
+import os
 import re
 from PIL import Image as PILImage
 from skimage import measure
 from skimage.measure import regionprops
 from scipy.ndimage import binary_dilation
 import torch
-print(torch.cuda.is_available())
+print(f"CUDA available: {torch.cuda.is_available()}")
 import matplotlib.pyplot as plt
 from requests.exceptions import RequestException
 # from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
 from FastSAM.fastsam.model import FastSAM
 from FastSAM.fastsam.prompt import FastSAMPrompt
 
+
+def get_openai_api_key():
+    """Get OpenAI API key from environment variable."""
+    api_key = os.environ.get('OPENAI_API_KEY')
+    if not api_key:
+        raise ValueError(
+            "OPENAI_API_KEY environment variable not set. "
+            "Please set it with: export OPENAI_API_KEY=your-key-here"
+        )
+    return api_key
+
 # self.show_image_popup(image_rgb, X, Y)
 class LandmarkDetectorNode(Node):
     def __init__(self):
         super().__init__('landmark_detector_node')
         self.get_logger().info('Started the Node.')
+
         # Parameters
-        self.declare_parameter('api_key', '') #ADD YOUR API KEY HERE
         self.declare_parameter('ground_truth_image_path', 'Images/Iribe/2.jpg')
         self.declare_parameter('image_topic', '/camera/color/image_raw')
-        
-        self.api_key = self.get_parameter('api_key').get_parameter_value().string_value
+        self.declare_parameter('fastsam_model_path', '/app/models/FastSAM-x.pt')
+        self.declare_parameter('save_image_plot_dir', './Image_plots/')
+        self.declare_parameter('timer_period', 10.0)
+
+        # Get API key from environment variable (preferred for Docker)
+        try:
+            self.api_key = get_openai_api_key()
+            self.get_logger().info('OpenAI API key loaded from environment')
+        except ValueError as e:
+            self.get_logger().error(str(e))
+            raise
+
         self.ground_truth_image_path = self.get_parameter('ground_truth_image_path').get_parameter_value().string_value
         self.image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
-        self.timer = self.create_timer(10.0, self.timer_callback)
+        fastsam_model_path = self.get_parameter('fastsam_model_path').get_parameter_value().string_value
+        self.save_image_plot = self.get_parameter('save_image_plot_dir').get_parameter_value().string_value
+        timer_period = self.get_parameter('timer_period').get_parameter_value().double_value
+
+        self.timer = self.create_timer(timer_period, self.timer_callback)
         self.latest_image = None
         self.is_processing = False
+
         # Initialize subscriber
-        self.publisher = self.create_publisher(Image, '/processed_image', 1
-                                               )
+        self.publisher = self.create_publisher(Image, '/processed_image', 1)
         self.subscription = self.create_subscription(
             Image,
             self.image_topic,
@@ -49,13 +74,13 @@ class LandmarkDetectorNode(Node):
         )
         self.bridge = CvBridge()
 
-        print("Is CUDA Available: ", torch.cuda.is_available())
+        self.get_logger().info(f"CUDA available: {torch.cuda.is_available()}")
 
         # FastSAM Model for Segmentation
         self.image_plot = True
-        self.save_image_plot = "./Image_plots/"
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = FastSAM('./Landmark_detector/FastSAM-x.pt')
+        self.get_logger().info(f"Loading FastSAM model from: {fastsam_model_path}")
+        self.model = FastSAM(fastsam_model_path)
         self.max_retries = 3
         self.delay = 5
 

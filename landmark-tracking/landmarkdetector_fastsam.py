@@ -4,36 +4,55 @@ import time
 import numpy as np
 import cv2
 import io
-import os 
+import os
 import sys
-import re 
+import re
 from PIL import Image
 from skimage.measure import regionprops
 # from scipy.ndimage import binary_dilation
 import matplotlib.pyplot as plt
 from requests.exceptions import RequestException
 import torch
-print(torch.cuda.is_available())
+print(f"CUDA available: {torch.cuda.is_available()}")
 from FastSAM.fastsam.model import FastSAM
 from FastSAM.fastsam.prompt import FastSAMPrompt
 
-""" Please Update the folders for the following before running the code
-    -save_plot
-    - ground_truth image
-    - test_image
-    - model checkpoints
-    """
+
+def get_openai_api_key():
+    """Get OpenAI API key from environment variable."""
+    api_key = os.environ.get('OPENAI_API_KEY')
+    if not api_key:
+        raise ValueError(
+            "OPENAI_API_KEY environment variable not set. "
+            "Please set it with: export OPENAI_API_KEY=your-key-here"
+        )
+    return api_key
+
+
+# Default paths - can be overridden via environment variables
+DEFAULT_FASTSAM_MODEL_PATH = os.environ.get('FASTSAM_MODEL_PATH', '/app/models/FastSAM-x.pt')
+DEFAULT_SAVE_IMAGE_PLOT = os.environ.get('SAVE_IMAGE_PLOT_DIR', './Image_plots/')
+
+
 class LandmarkDetector:
-    def __init__(self, api_key, ground_truth_image_path, test_image_path):
-        self.api_key = api_key
+    def __init__(self, api_key=None, ground_truth_image_path=None, test_image_path=None,
+                 fastsam_model_path=None, save_image_plot_dir=None):
+        # Get API key from parameter or environment
+        if api_key:
+            self.api_key = api_key
+        else:
+            self.api_key = get_openai_api_key()
+
         self.ground_truth_image_path = ground_truth_image_path
         self.test_image_path = test_image_path
-        # self.show_masked_image = True
         self.image_plot = True
-        self.save_image_plot = "YOUR FILE PATH HERE"
-        # self.save_path_mask = "/home/vignesh/Gamma/output_images/masks/"
+        self.save_image_plot = save_image_plot_dir or DEFAULT_SAVE_IMAGE_PLOT
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = FastSAM('/home/vignesh/Gamma/Landmark_detector/FastSAM-x.pt')
+
+        # Load FastSAM model from parameterized path
+        model_path = fastsam_model_path or DEFAULT_FASTSAM_MODEL_PATH
+        print(f"Loading FastSAM model from: {model_path}")
+        self.model = FastSAM(model_path)
         self.max_retries = 3
         self.delay = 5
 
@@ -231,10 +250,15 @@ class LandmarkDetector:
         print(f"Elapsed time: {end_time - start_time} seconds")
 
 
-api_key = ""
-ground_truth_image_path = "YOUR FILE PATH HERE"
-test_image_path = "YOUR FILE PATH HERE"
+if __name__ == '__main__':
+    # Get paths from environment variables or use defaults
+    ground_truth_image_path = os.environ.get('GROUND_TRUTH_IMAGE_PATH', 'Images/Iribe/2.jpg')
+    test_image_path = os.environ.get('TEST_IMAGE_PATH', 'Images/Iribe/1.jpg')
 
-detector = LandmarkDetector(api_key, ground_truth_image_path, test_image_path)
-detector.run()
+    # API key is loaded from OPENAI_API_KEY environment variable
+    detector = LandmarkDetector(
+        ground_truth_image_path=ground_truth_image_path,
+        test_image_path=test_image_path
+    )
+    detector.run()
 

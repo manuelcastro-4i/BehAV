@@ -38,59 +38,48 @@ from concurrent.futures import ProcessPoolExecutor
 from scipy.spatial import KDTree
 from threading import Condition, Lock
 
-# This import is added to allow setting autonomous mode wihtout CLI
+# GhostInit class for Ghost Robotics robots (disabled by default for Go2 simulation)
+# To enable, set the 'enable_ghost_init' parameter to True and uncomment the service imports
 # from ghost_manager_interfaces.srv import EnsureMode, SetParam
 
 
 class GhostInit(Node):
+    """Ghost Robotics initialization node - only used with Ghost robots, not Go2."""
 
     def __init__(self):
+        super().__init__('Ghost_initializaton')
 
-        super().__init__('Ghost_initializaton') 
-    
         self.qos_profile_be = QoSProfile(
                                         reliability=QoSReliabilityPolicy.BEST_EFFORT,
-                                        history=QoSHistoryPolicy.KEEP_LAST,  
-                                        depth=10  
+                                        history=QoSHistoryPolicy.KEEP_LAST,
+                                        depth=10
                                         )
 
         self.qos_profile_kl = QoSProfile(
                                         reliability=QoSReliabilityPolicy.RELIABLE,
-                                        history=QoSHistoryPolicy.KEEP_LAST,  
-                                        depth=10  
+                                        history=QoSHistoryPolicy.KEEP_LAST,
+                                        depth=10
                                         )
-        
-        # For setting to Autonomous Mode
 
-        self.mode_client = self.create_client(EnsureMode, 'ensure_mode')
-        while not self.mode_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('EnsureMode service not available, waiting again...')
-        self.mode_req = EnsureMode.Request()
-        self.param_client = self.create_client(SetParam, 'set_param')
-        while not self.mode_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('SetParam service not available, waiting again...')
-        self.param_req = SetParam.Request()
-
-        self.ensure_mode("control_mode", 170)
-        self.ensure_mode("action", 2) # walk mode
-
+        self.get_logger().warn('GhostInit requires ghost_manager_interfaces - skipping initialization')
+        # Uncomment below for Ghost Robotics robots:
+        # from ghost_manager_interfaces.srv import EnsureMode, SetParam
+        # self.mode_client = self.create_client(EnsureMode, 'ensure_mode')
+        # while not self.mode_client.wait_for_service(timeout_sec=1.0):
+        #     self.get_logger().info('EnsureMode service not available, waiting again...')
+        # self.mode_req = EnsureMode.Request()
+        # self.param_client = self.create_client(SetParam, 'set_param')
+        # while not self.mode_client.wait_for_service(timeout_sec=1.0):
+        #     self.get_logger().info('SetParam service not available, waiting again...')
+        # self.param_req = SetParam.Request()
+        # self.ensure_mode("control_mode", 170)
+        # self.ensure_mode("action", 2) # walk mode
 
     def set_param(self, param_name, value, planner=False):
-        self.param_req.param.name = param_name
-        self.param_req.param.val = value
-        self.param_req.param.planner = planner
-        future = self.param_client.call_async(self.param_req)
-        rclpy.spin_until_future_complete(self, future)
-        response = future.result()
-        self.get_logger().info('%s' % response.result_str)
+        self.get_logger().warn('GhostInit.set_param called but Ghost services not available')
 
     def ensure_mode(self, field_name, valdes):
-        self.mode_req.field = field_name
-        self.mode_req.valdes = valdes
-        future = self.mode_client.call_async(self.mode_req)
-        rclpy.spin_until_future_complete(self, future)
-        response = future.result()
-        self.get_logger().info('%s' % response.result_str)
+        self.get_logger().warn('GhostInit.ensure_mode called but Ghost services not available')
 
 class ControlLawSettings:
     # (self, K1=1.2, K2=1, BETA=0.4, LAMBDA=2, V_MAX=0.8, V_MIN=0.0, R_THRESH=0.05):
@@ -271,30 +260,73 @@ class BehAV_Planner(Node):
 
     def __init__(self):
 
-        super().__init__('BehAV_planner') 
+        super().__init__('BehAV_planner')
+
+        # Declare ROS2 parameters for Docker/containerized operation
+        self._declare_parameters()
 
         self.qos_profile  = QoSProfile(
                                         reliability=QoSReliabilityPolicy.BEST_EFFORT,
-                                        history=QoSHistoryPolicy.KEEP_LAST,  
-                                        depth=10  
+                                        history=QoSHistoryPolicy.KEEP_LAST,
+                                        depth=10
                                         )
 
         self.qos_profile_intensity  = QoSProfile(
                                                 reliability=QoSReliabilityPolicy.RELIABLE,
-                                                history=QoSHistoryPolicy.KEEP_LAST,  
-                                                depth=10  
+                                                history=QoSHistoryPolicy.KEEP_LAST,
+                                                depth=10
                                                 )
-        
-        #Run this service call inside ghost to set the robot to autonomous
-        # ros2 service call /ensure_mode ghost_manager_interfaces/EnsureMode "{field: control_mode, valdes: 170}"
 
-        # self.ghost_init = GhostInit()
-        # self.config = Config()
+        # GhostInit for Ghost Robotics robots (disabled by default for Go2)
+        if self.get_parameter('enable_ghost_init').value:
+            self.ghost_init = GhostInit()
+            self.get_logger().info('GhostInit enabled')
+        else:
+            self.get_logger().info('GhostInit disabled (use enable_ghost_init:=true for Ghost robots)')
+
+    def _declare_parameters(self):
+        """Declare all ROS2 parameters for containerized operation."""
+        # Goal parameters (replaces input() calls)
+        self.declare_parameter('publish_to_motors', True)
+        self.declare_parameter('goal_radius', 5.0)
+        self.declare_parameter('goal_theta', 0.0)
+        self.declare_parameter('goal_delta', 0.0)
+
+        # Ghost Robotics initialization (disabled for Go2 simulation)
+        self.declare_parameter('enable_ghost_init', False)
+
+        # Camera intrinsic parameters (Go2 simulation defaults)
+        self.declare_parameter('camera_fx', 554.25)
+        self.declare_parameter('camera_fy', 554.25)
+        self.declare_parameter('camera_cx', 320.0)
+        self.declare_parameter('camera_cy', 240.0)
+        self.declare_parameter('camera_height', 0.35)
+        self.declare_parameter('camera_tilt_angle', 0.0)
+        self.declare_parameter('camera_offset_x', 0.0)
+        self.declare_parameter('camera_offset_y', 0.0)
+
+        # Control law parameters
+        self.declare_parameter('k1', 1.2)
+        self.declare_parameter('k2', 1.0)
+        self.declare_parameter('beta', 0.4)
+        self.declare_parameter('lambda_val', 2.0)
+        self.declare_parameter('v_max', 0.8)
+        self.declare_parameter('v_min', 0.0)
+        self.declare_parameter('r_thresh', 0.05)
 
         # k1 = 0 reduces the controller to pure waypointfollowing, while k1 >> 0 offers extreme scenario of pose-following where theta is reduced much faster than r
         # K1=1.2, K2=1, BETA=0.4, LAMBDA=2, V_MAX=0.8, V_MIN=0.0, R_THRESH=0.05
 
-        self.settings = ControlLawSettings(K1=1.2, K2=1, BETA=0.4, LAMBDA=2, R_THRESH=0.05, V_MAX=0.8, V_MIN=0.0)
+        # Use parameters for control law settings
+        k1 = self.get_parameter('k1').value
+        k2 = self.get_parameter('k2').value
+        beta = self.get_parameter('beta').value
+        lambda_val = self.get_parameter('lambda_val').value
+        v_max = self.get_parameter('v_max').value
+        v_min = self.get_parameter('v_min').value
+        r_thresh = self.get_parameter('r_thresh').value
+
+        self.settings = ControlLawSettings(K1=k1, K2=k2, BETA=beta, LAMBDA=lambda_val, R_THRESH=r_thresh, V_MAX=v_max, V_MIN=v_min)
         self.control_law = ControlLaw(self.settings)
 
         self.odom_condition = Condition()
@@ -311,15 +343,15 @@ class BehAV_Planner(Node):
         self.behav_costmap_publisher = self.create_publisher(Image, '/behav_costmap', 10)
         self.traj_image_pub = self.create_publisher(Image, '/traj_marked_image', 10)
 
-        choice = input("Publish to Robot Motors ? 1 or 0: ")
-        
-        if(int(choice) == 1):
+        # Use ROS2 parameter instead of input()
+        publish_to_motors = self.get_parameter('publish_to_motors').value
+
+        if publish_to_motors:
             self.pub = self.create_publisher(Twist, '/mcu/command/manual_twist', 10)
-            # self.pub = self.create_publisher(Twist, '/cmd_vel', 10)
-            print("Publishing to cmd_vel")
+            self.get_logger().info("Publishing to /mcu/command/manual_twist")
         else:
             self.pub = self.create_publisher(Twist, "/dont_publish", 1)
-            print("Not publishing!")
+            self.get_logger().info("Motor publishing disabled")
 
         self.max_speed = 0.8  # [m/s]
 
@@ -351,11 +383,14 @@ class BehAV_Planner(Node):
 
         self.final_goal_pose = Pose()
 
-        print("torch.cuda.is_available()",torch.cuda.is_available())
-        # Taking three float inputs from the user
-        self.goal_radius = float(input("Enter the goal distance r (meters) : "))
-        self.goal_theta = float(input("Enter the goal heading angle theta (degrees, left +ve) : "))
-        self.goal_delta = float(input("Enter the goal pose angle (degrees) : "))
+        self.get_logger().info(f"CUDA available: {torch.cuda.is_available()}")
+
+        # Use ROS2 parameters instead of input()
+        self.goal_radius = self.get_parameter('goal_radius').value
+        self.goal_theta = self.get_parameter('goal_theta').value
+        self.goal_delta = self.get_parameter('goal_delta').value
+
+        self.get_logger().info(f"Goal parameters - radius: {self.goal_radius}m, theta: {self.goal_theta}deg, delta: {self.goal_delta}deg")
 
         self.velocityGain = 1.0
 
@@ -409,15 +444,21 @@ class BehAV_Planner(Node):
         # Flag to control output publishing
         self.publish_outputs = False
 
-        #traj projection params
-        self.Projection_Matrix = [[910.7625732421875, 0.0, 643.8300781250, 0.0],[0.0,910.8343505859375,373.2903137207031,0.0],[0.0, 0.0, 1.0, 0.0]] # realsense lidar camera L515
+        # Trajectory projection params - use ROS2 parameters for camera intrinsics
+        fx = self.get_parameter('camera_fx').value
+        fy = self.get_parameter('camera_fy').value
+        cx = self.get_parameter('camera_cx').value
+        cy = self.get_parameter('camera_cy').value
 
-        # self.Projection_Matrix = [[607.175048828125, 0.0, 322.55340576171875, 0.0], [0.0, 607.222900390625, 248.86021423339844, 0.0], [0.0, 0.0, 1.0, 0.0]] # realsense lidar camera L515
+        # Build projection matrix from camera intrinsics
+        self.Projection_Matrix = [[fx, 0.0, cx, 0.0], [0.0, fy, cy, 0.0], [0.0, 0.0, 1.0, 0.0]]
 
-        self.camera_height = 0.59 #1.01 #height of the camera w.r.t. the robot's base/ground level
-        self.camera_tilt_angle = 0 # in degrees, downward is negative
-        self.camera_offset_x = 0 #0.46
-        self.camera_offset_y = 0 #0.065 #camera y axis offset in meters
+        self.camera_height = self.get_parameter('camera_height').value
+        self.camera_tilt_angle = self.get_parameter('camera_tilt_angle').value
+        self.camera_offset_x = self.get_parameter('camera_offset_x').value
+        self.camera_offset_y = self.get_parameter('camera_offset_y').value
+
+        self.get_logger().info(f"Camera params - fx:{fx}, fy:{fy}, cx:{cx}, cy:{cy}, height:{self.camera_height}m")
 
     def wait_for_odom(self):
         # Wait for the odom message

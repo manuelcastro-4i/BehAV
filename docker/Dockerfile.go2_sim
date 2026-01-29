@@ -1,0 +1,41 @@
+# Go2 Robot Simulator Docker Image
+# Based on ROS2 Jazzy with Gazebo Harmonic
+FROM ros:jazzy-desktop
+
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install additional dependencies
+RUN apt-get update && apt-get install -y \
+    ros-jazzy-gazebo-ros-pkgs \
+    ros-jazzy-robot-state-publisher \
+    ros-jazzy-joint-state-publisher \
+    ros-jazzy-xacro \
+    ros-jazzy-rmw-cyclonedds-cpp \
+    ros-jazzy-rviz2 \
+    python3-pip \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set up workspace
+WORKDIR /app
+
+# Clone go2_ros2_sim_py repository
+RUN git clone https://github.com/abutalipovvv/go2_ros2_sim_py.git /app/go2_sim
+
+# Build the workspace
+WORKDIR /app/go2_sim
+RUN . /opt/ros/jazzy/setup.sh && \
+    colcon build --symlink-install
+
+# Set environment variables
+ENV ROS_DOMAIN_ID=0
+ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+ENV GAZEBO_MODEL_PATH=/app/go2_sim/install/share:$GAZEBO_MODEL_PATH
+
+# Copy entrypoint script
+COPY docker/entrypoint_sim.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["ros2", "launch", "go2_description", "gazebo.launch.py"]
