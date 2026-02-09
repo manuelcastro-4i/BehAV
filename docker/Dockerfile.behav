@@ -1,5 +1,5 @@
 # BehAV Navigation System Docker Image
-# Base: NVIDIA CUDA with Ubuntu 22.04 for ROS2 Jazzy
+# Base: NVIDIA CUDA with Ubuntu 22.04 for ROS2 Humble
 FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
 
 # Prevent interactive prompts during package installation
@@ -23,20 +23,20 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Add ROS2 Jazzy repository
+# Add ROS2 Humble repository (LTS, compatible with Ubuntu 22.04)
 RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
 RUN echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
 
-# Install ROS2 Jazzy base and required packages
+# Install ROS2 Humble base and required packages
 RUN apt-get update && apt-get install -y \
-    ros-jazzy-ros-base \
-    ros-jazzy-cv-bridge \
-    ros-jazzy-sensor-msgs \
-    ros-jazzy-geometry-msgs \
-    ros-jazzy-nav-msgs \
-    ros-jazzy-std-msgs \
-    ros-jazzy-image-transport \
-    ros-jazzy-rmw-cyclonedds-cpp \
+    ros-humble-ros-base \
+    ros-humble-cv-bridge \
+    ros-humble-sensor-msgs \
+    ros-humble-geometry-msgs \
+    ros-humble-nav-msgs \
+    ros-humble-std-msgs \
+    ros-humble-image-transport \
+    ros-humble-rmw-cyclonedds-cpp \
     python3-colcon-common-extensions \
     && rm -rf /var/lib/apt/lists/*
 
@@ -47,10 +47,10 @@ RUN pip3 install --no-cache-dir \
     --index-url https://download.pytorch.org/whl/cu121
 
 RUN pip3 install --no-cache-dir \
-    transformers>=4.30.0 \
+    "numpy>=1.24.0,<2.0.0" \
+    "transformers>=4.30.0,<4.40.0" \
     opencv-python>=4.8.0 \
     opencv-python-headless>=4.8.0 \
-    numpy>=1.24.0 \
     scipy>=1.10.0 \
     scikit-image>=0.21.0 \
     matplotlib>=3.7.0 \

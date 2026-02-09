@@ -1,0 +1,50 @@
+# Landmark Detection - Standalone Docker Image (no ROS2)
+# For testing landmark detection with FastSAM + GPT-4 Vision
+# CPU-only version for initial testing (lighter download)
+FROM python:3.10-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install basic dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install dependencies first (from PyPI, more reliable)
+RUN pip3 install --no-cache-dir \
+    numpy>=1.24.0 \
+    pillow>=10.0.0 \
+    scipy>=1.10.0 \
+    scikit-image>=0.21.0 \
+    matplotlib>=3.7.0 \
+    opencv-python>=4.8.0 \
+    openai>=1.0.0 \
+    requests>=2.31.0 \
+    pandas>=2.0.0
+
+# Install PyTorch CPU-only (pinned <2.6 for torch.load compatibility with FastSAM/ultralytics)
+RUN pip3 install --no-cache-dir --timeout 300 --retries 5 \
+    torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
+
+# Install ultralytics (includes FastSAM support)
+RUN pip3 install --no-cache-dir --timeout 300 --retries 5 ultralytics>=8.0.0
+
+# Clone FastSAM repository
+RUN git clone https://github.com/CASIA-IVA-Lab/FastSAM.git /app/FastSAM
+
+# Set up workspace
+WORKDIR /app
+
+# Copy landmark-tracking source
+COPY landmark-tracking/ /app/landmark-tracking/
+
+# Add FastSAM to Python path
+ENV PYTHONPATH=/app:/app/FastSAM:$PYTHONPATH
+
+# Create directories for models and output
+RUN mkdir -p /app/models /app/Image_plots
+
+# Default command shows help
+CMD ["python3", "/app/landmark-tracking/landmarkdetector_fastsam.py", "--help"]

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Go2 Robot Simulator with Gazebo
   go2_sim:
@@ -112,6 +110,59 @@ services:
       --ros-args
       -p fastsam_model_path:=/app/models/FastSAM-x.pt
       -p image_topic:=/robot1/camera/image_raw
+
+  # Instruction Decomposition - Lightweight test service (no ROS2, no GPU)
+  # Usage:
+  #   docker-compose --profile test run --rm instruction_decomposition --help
+  #   docker-compose --profile test run --rm instruction_decomposition --demo
+  #   docker-compose --profile test run --rm instruction_decomposition -i
+  #   docker-compose --profile test run --rm instruction_decomposition -I "Your instruction"
+  instruction_decomposition:
+    image: python:3.10-slim
+    container_name: instruction_decomposition
+    working_dir: /app
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - ./instruction-decomposition:/app/instruction-decomposition:ro
+    profiles:
+      - test  # Only starts with --profile test
+    stdin_open: true   # Required for interactive mode
+    tty: true          # Required for interactive mode
+    entrypoint:
+      - bash
+      - -c
+      - |
+        pip install --quiet openai numpy 2>/dev/null
+        exec python /app/instruction-decomposition/GPT4o/instruction-to-behavioral-costs.py "$@"
+      - --
+    command: ["--help"]
+
+  # Landmark Detection - Standalone test service (CPU version for testing, no ROS2)
+  # Note: For production with GPU, use the behav service or modify to use CUDA image
+  # Usage:
+  #   docker-compose --profile test run --rm landmark_test --help
+  #   docker-compose --profile test run --rm landmark_test --demo
+  #   docker-compose --profile test run --rm landmark_test -g Images/Testudo/Ground_truth.webp -t Images/Testudo/1.jpg
+  landmark_test:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.landmark
+    container_name: landmark_test
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - ./models:/app/models:ro
+      - ./landmark-tracking/Images:/app/landmark-tracking/Images:ro
+      - ./output:/app/Image_plots
+    profiles:
+      - test
+    stdin_open: true
+    tty: true
+    entrypoint:
+      - python3
+      - /app/landmark-tracking/landmarkdetector_fastsam.py
+    command: ["--help"]
 
 networks:
   ros2_net:

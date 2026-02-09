@@ -2,7 +2,7 @@
 set -e
 
 # Source ROS2 setup
-source /opt/ros/jazzy/setup.bash
+source /opt/ros/humble/setup.bash
 
 # Source workspace if it exists
 if [ -f /app/install/setup.bash ]; then

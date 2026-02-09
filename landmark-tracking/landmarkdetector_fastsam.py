@@ -1,3 +1,43 @@
+#!/usr/bin/env python3
+"""
+Landmark Detection - BehAV Navigation System
+
+Detects landmarks in images using FastSAM segmentation + GPT-4 Vision.
+Compares a ground truth image of a known landmark with a test image to:
+1. Determine if the landmark is present
+2. Identify which mask contains the landmark
+3. Estimate the camera distance from the landmark
+
+Usage:
+    # Show help
+    python landmarkdetector_fastsam.py --help
+
+    # Run demo with default Testudo images
+    python landmarkdetector_fastsam.py --demo
+
+    # Specify custom images
+    python landmarkdetector_fastsam.py -g Images/Iribe/Ground_truth.jpg -t Images/Iribe/1.jpg
+
+    # Specify reference distance (default 3m for Testudo)
+    python landmarkdetector_fastsam.py --demo --ref-distance 80
+
+Docker:
+    docker-compose --profile test run --rm landmark_test --demo
+    docker-compose --profile test run --rm landmark_test -g Images/Testudo/Ground_truth.webp -t Images/Testudo/1.jpg
+
+Environment:
+    OPENAI_API_KEY - Required. Your OpenAI API key for GPT-4 Vision.
+    FASTSAM_MODEL_PATH - Optional. Path to FastSAM-x.pt model (default: /app/models/FastSAM-x.pt)
+
+Available test image sets:
+    - Testudo (statue, ref: 3m)
+    - Iribe (building, ref: 80m)
+    - Douglass (building, ref: 15m)
+    - M_circle (landmark, ref: 21.38m)
+    - Idea_factory (building, ref: 29.1m)
+    - Chapel (building, ref: 32m)
+"""
+
 import requests
 import base64
 import time
@@ -7,15 +47,28 @@ import io
 import os
 import sys
 import re
+import argparse
 from PIL import Image
 from skimage.measure import regionprops
-# from scipy.ndimage import binary_dilation
+from skimage import measure
+from scipy.ndimage import binary_dilation
 import matplotlib.pyplot as plt
 from requests.exceptions import RequestException
 import torch
-print(f"CUDA available: {torch.cuda.is_available()}")
-from FastSAM.fastsam.model import FastSAM
-from FastSAM.fastsam.prompt import FastSAMPrompt
+
+# Lazy load FastSAM to allow --help without GPU
+FastSAM = None
+FastSAMPrompt = None
+
+def load_fastsam():
+    """Lazy load FastSAM modules."""
+    global FastSAM, FastSAMPrompt
+    if FastSAM is None:
+        print(f"CUDA available: {torch.cuda.is_available()}")
+        from FastSAM.fastsam.model import FastSAM as _FastSAM
+        from FastSAM.fastsam.prompt import FastSAMPrompt as _FastSAMPrompt
+        FastSAM = _FastSAM
+        FastSAMPrompt = _FastSAMPrompt
 
 
 def get_openai_api_key():
@@ -36,7 +89,7 @@ DEFAULT_SAVE_IMAGE_PLOT = os.environ.get('SAVE_IMAGE_PLOT_DIR', './Image_plots/'
 
 class LandmarkDetector:
     def __init__(self, api_key=None, ground_truth_image_path=None, test_image_path=None,
-                 fastsam_model_path=None, save_image_plot_dir=None):
+                 fastsam_model_path=None, save_image_plot_dir=None, ref_distance=3.0, verbose=False):
         # Get API key from parameter or environment
         if api_key:
             self.api_key = api_key
@@ -48,10 +101,17 @@ class LandmarkDetector:
         self.image_plot = True
         self.save_image_plot = save_image_plot_dir or DEFAULT_SAVE_IMAGE_PLOT
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.ref_distance = ref_distance
+        self.verbose = verbose
+
+        # Lazy load FastSAM
+        load_fastsam()
 
         # Load FastSAM model from parameterized path
         model_path = fastsam_model_path or DEFAULT_FASTSAM_MODEL_PATH
         print(f"Loading FastSAM model from: {model_path}")
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"FastSAM model not found at: {model_path}")
         self.model = FastSAM(model_path)
         self.max_retries = 3
         self.delay = 5
@@ -152,49 +212,105 @@ class LandmarkDetector:
         cv2.circle(circled_img, (int(x), int(y)), radius, color, thickness)
         return circled_img
 
+    def process_and_display_masks(self, masks, image, distance_threshold=200):
+        """Merge nearby masks and number them on the image.
+
+        Returns (annotated_image, merged_mask_arrays) where merged_mask_arrays
+        is a list of binary numpy arrays suitable for get_mask_coordinates().
+        """
+        if isinstance(masks, torch.Tensor):
+            masks = masks.cpu().numpy()
+
+        merged_masks = []
+        used_masks = set()
+
+        for i in range(len(masks)):
+            if i in used_masks:
+                continue
+            merged_mask = masks[i].astype(bool).copy()
+            for j in range(i + 1, len(masks)):
+                if j in used_masks:
+                    continue
+                other_mask = masks[j].astype(bool)
+                if np.any(binary_dilation(merged_mask, iterations=distance_threshold) & other_mask):
+                    merged_mask |= other_mask
+                    used_masks.add(j)
+            merged_masks.append(merged_mask)
+
+        if len(merged_masks) == 0:
+            return image, []
+
+        # Sort by area (largest first)
+        merged_masks.sort(key=lambda m: np.sum(m), reverse=True)
+
+        # Draw contours
+        annotated = image.copy()
+        for mask in merged_masks:
+            contours = measure.find_contours(mask, 0.5)
+            for contour in contours:
+                contour = np.array(contour, dtype=np.int32)
+                cv2.polylines(annotated, [contour[:, [1, 0]]], isClosed=True,
+                              color=(255, 255, 255), thickness=2)
+
+        # Compute centroids and sort by position (top-to-bottom, left-to-right)
+        props = []
+        for idx, mask in enumerate(merged_masks):
+            y_coords, x_coords = np.where(mask)
+            cx, cy = np.mean(x_coords), np.mean(y_coords)
+            props.append((idx, cx, cy))
+        props.sort(key=lambda p: (p[2], p[1]))
+
+        # Number each mask
+        ordered_masks = []
+        for number, (idx, cx, cy) in enumerate(props, start=1):
+            cv2.putText(annotated, str(number), (int(cx), int(cy)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 255, 255), 3, cv2.LINE_AA)
+            ordered_masks.append(merged_masks[idx])
+
+        return annotated, ordered_masks
+
     def run(self):
         start_time = time.time()
         image_feed = cv2.imread(self.test_image_path)
         image = image_feed
-        # print(image.shape)
         image = cv2.cvtColor(image_feed, cv2.COLOR_BGR2RGB)
-        
-        results = self.model(image, device=self.device, retina_masks=True, imgsz=1024, conf=0.4, iou=0.9)
-        prompt_process = FastSAMPrompt(image, results, device=self.device) 
-        ann = prompt_process.everything_prompt() #These annotations contain all the masks 
-        # print(ann.shape)
-        masked_image, merged_ann = prompt_process.plot(annotations=ann, distance_threshold=200) # These annotations contains only the masks after the threshold
-        prompt_presence = """Compare two images:
-            1. A ground truth image of a landmark building.
-            2. A test image.
 
-            Task 1: Is the landmark present in the test image
-            Example Response format for Task 1: 
+        results = self.model(image, device=self.device, retina_masks=True, imgsz=1024, conf=0.4, iou=0.9)
+        prompt_process = FastSAMPrompt(image, results, device=self.device)
+        ann = prompt_process.everything_prompt()
+        masked_image, merged_ann = self.process_and_display_masks(ann, image)
+        prompt_presence = f"""Compare two images:
+            1. A ground truth image of a landmark taken from {self.ref_distance} meters away.
+            2. A masked test image with numbered segments.
+
+            Task 1: Is the landmark present in the test image?
+            Example Response format for Task 1:
             Landmark - YES/NO
 
             If YES, proceed to Tasks 2 and 3:
 
             Task 2: Identify the mask number containing the landmark (even partially).
-            Task 3: Estimate the camera distance from the landmark in the test image. 
-            Based on on the Ground truth image of a landmark building which is taken from 21.38 meters away from the camera. Give me a number and no text
+            Task 3: Estimate the camera distance from the landmark in the test image.
+            Use the ground truth image ({self.ref_distance}m reference) to estimate relative size.
 
             Example response format for Task 2 and Task 3:
             Mask number: 3
             Distance: 120 meters """
-        
-    #iribe- 80 meters 
-    #Douglass - 15 meters
-    #M-circle-  21.38 meters
-    #Idea - 29.1 meters
-    #Testudo - 3 meters
-    #chapel- 32 meters
+
+        # Reference distances for different landmarks:
+        # Iribe - 80 meters
+        # Douglass - 15 meters
+        # M_circle - 21.38 meters
+        # Idea_factory - 29.1 meters
+        # Testudo - 3 meters
+        # Chapel - 32 meters
         
         headers = {
         'Authorization': f'Bearer {self.api_key}',
         'Content-Type': 'application/json'
         }
         data_presence = {
-            "model": "gpt-4-vision-preview",
+            "model": "gpt-4o",
             "messages": [
                 {
                     "role": "user",
@@ -208,57 +324,215 @@ class LandmarkDetector:
             "max_tokens": 300
         }
         response_json = self.make_api_request(headers, data_presence)
-        # print("API Response:", response_json)
-        if response_json:
-            response_text = response_json['choices'][0]['message']['content'].strip()
-            # present = response_text.split(' ')[-1]  
-            landmark_status = response_text.split('-')[1].strip().split('\n')[0]
-            # print(f'The landmark is {present} in the image')
-            print(response_text)
-            
-            if landmark_status == 'YES':
-                # print((response_text['choices'][0]['message']['content'][13].strip()))
-                # mask_number_line = [line for line in response_text.split('\n') if 'Mask number:' in line][0].split(':')
-                mask_number_line = [line for line in response_text.split('\n') if 'Mask number:' in line][0]
-                mask_number = re.search(r'Mask number:\s*(\d+)', mask_number_line)
-                distance_line = [line for line in response_text.split('\n') if 'Distance:' in line][0]
-                distance_number = distance_line.split(':')[1].strip()
-                # print(distance_number)
-                if mask_number:
-                    mask_number = int(mask_number.group(1))
-                    # print(f"Extracted mask number: {mask_number}")
-                else:
-                    print("Mask number not found")
-                # print(mask_number_line)
-                target_mask_number = mask_number
-                # print(ann)
-                coordinates = self.get_mask_coordinates(merged_ann, target_mask_number)
-                # print(coordinates)
-                # target_mask_number = response_text.split('-')
-                # print(target_mask_number)
-                # pixel_location = self. get_mask_coordinates(ann, target_mask_number)
-                X , Y = coordinates[0], coordinates[1] 
-                # print(f"The pixel location of the target [X ={X}, Y = {Y}]")
-                circled_img = self.plot_dot_on_image(image, X, Y )
-                # print(circled_img.shape)
-                if self.image_plot:
-                    self.save_images(image,masked_image,circled_img, target_mask_number,distance_number )
-        else:
-            print("Unable to determine mask number or distance as the landmark building is not present in the given image.")
+
+        if self.verbose and response_json:
+            print(f"\n[VERBOSE] Raw GPT-4 Vision response:")
+            print(response_json['choices'][0]['message']['content'].strip())
+            print()
 
         end_time = time.time()
-        print(f"Elapsed time: {end_time - start_time} seconds")
+        elapsed_time = end_time - start_time
+
+        if response_json:
+            response_text = response_json['choices'][0]['message']['content'].strip()
+            try:
+                landmark_status = response_text.split('-')[1].strip().split('\n')[0].upper()
+            except (IndexError, AttributeError):
+                landmark_status = "NO"
+
+            if landmark_status == 'YES':
+                # Extract mask number
+                mask_number_match = re.search(r'Mask number:\s*(\d+)', response_text)
+                distance_match = re.search(r'Distance:\s*(\d+(?:\.\d+)?)\s*(?:meters?|m)?', response_text, re.IGNORECASE)
+
+                mask_number = int(mask_number_match.group(1)) if mask_number_match else None
+                distance_str = distance_match.group(0) if distance_match else None
+
+                if mask_number:
+                    try:
+                        coordinates = self.get_mask_coordinates(merged_ann, mask_number)
+                        X, Y = coordinates[0], coordinates[1]
+                        circled_img = self.plot_dot_on_image(image, X, Y)
+
+                        if self.image_plot:
+                            self.save_images(image, masked_image, circled_img, mask_number, distance_str or "Unknown")
+                            print(f"\nOutput saved to: {self.save_path_plot}")
+
+                        print_results(
+                            landmark_present=True,
+                            mask_number=mask_number,
+                            distance=distance_str,
+                            pixel_coords=(X, Y),
+                            elapsed_time=elapsed_time
+                        )
+                    except (ValueError, IndexError) as e:
+                        print(f"Error extracting mask coordinates: {e}")
+                        print_results(landmark_present=True, mask_number=mask_number,
+                                    distance=distance_str, elapsed_time=elapsed_time)
+                else:
+                    print("Warning: Landmark detected but mask number not found in response")
+                    print_results(landmark_present=True, elapsed_time=elapsed_time)
+            else:
+                print_results(landmark_present=False, elapsed_time=elapsed_time)
+        else:
+            print("Error: Unable to get response from GPT-4 Vision API")
+            print_results(landmark_present=False, elapsed_time=elapsed_time)
+
+
+def print_results(landmark_present, mask_number=None, distance=None, pixel_coords=None, elapsed_time=None):
+    """Print formatted detection results."""
+    separator = "=" * 70
+
+    print(f"\n{separator}")
+    print("LANDMARK DETECTION RESULTS")
+    print(separator)
+
+    print(f"\n  Landmark Present: {'YES' if landmark_present else 'NO'}")
+
+    if landmark_present and mask_number:
+        print(f"\n{'-' * 70}")
+        print("LOCALIZATION")
+        print(f"{'-' * 70}")
+        print(f"\n  Mask Number:      {mask_number}")
+        if distance:
+            print(f"  Estimated Distance: {distance}")
+        if pixel_coords:
+            print(f"  Pixel Location:   X={pixel_coords[0]}, Y={pixel_coords[1]}")
+
+    if elapsed_time:
+        print(f"\n  Processing Time:  {elapsed_time:.2f} seconds")
+
+    print(f"\n{separator}\n")
+
+
+# Demo image sets with their reference distances
+DEMO_SETS = {
+    'Testudo': {'gt': 'Images/Testudo/Ground_truth.webp', 'test': 'Images/Testudo/1.jpg', 'ref': 3.0},
+    'Iribe': {'gt': 'Images/Iribe/2.jpg', 'test': 'Images/Iribe/1.jpg', 'ref': 80.0},
+    'Douglass': {'gt': 'Images/Douglass/2.jpg', 'test': 'Images/Douglass/1.jpg', 'ref': 15.0},
+    'M_circle': {'gt': 'Images/M_circle/2.jpg', 'test': 'Images/M_circle/1.jpg', 'ref': 21.38},
+    'Idea_factory': {'gt': 'Images/Idea_factory/2.jpg', 'test': 'Images/Idea_factory/1.jpg', 'ref': 29.1},
+    'Chapel': {'gt': 'Images/Chapel/2.jpg', 'test': 'Images/Chapel/1.jpg', 'ref': 32.0},
+}
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Detect landmarks in images using FastSAM + GPT-4 Vision.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s --demo                    # Run with Testudo demo images
+  %(prog)s --demo --landmark Iribe   # Run with Iribe building
+  %(prog)s -g gt.jpg -t test.jpg     # Use custom images
+  %(prog)s -g gt.jpg -t test.jpg --ref-distance 50
+
+Available demo landmarks: Testudo, Iribe, Douglass, M_circle, Idea_factory, Chapel
+
+Environment Variables:
+  OPENAI_API_KEY       Required. Your OpenAI API key.
+  FASTSAM_MODEL_PATH   Optional. Path to FastSAM-x.pt model.
+
+Docker Usage:
+  docker-compose --profile test run --rm landmark_test --demo
+  docker-compose --profile test run --rm landmark_test -g Images/Testudo/Ground_truth.webp -t Images/Testudo/1.jpg
+        """
+    )
+
+    parser.add_argument(
+        '-g', '--ground-truth',
+        dest='ground_truth',
+        help='Path to ground truth image of the landmark'
+    )
+    parser.add_argument(
+        '-t', '--test-image',
+        dest='test_image',
+        help='Path to test image to search for landmark'
+    )
+    parser.add_argument(
+        '--ref-distance',
+        type=float,
+        default=3.0,
+        help='Reference distance (meters) at which ground truth was taken (default: 3.0)'
+    )
+    parser.add_argument(
+        '--demo', '-d',
+        action='store_true',
+        help='Run demo with predefined test images'
+    )
+    parser.add_argument(
+        '--landmark', '-l',
+        choices=list(DEMO_SETS.keys()),
+        default='Testudo',
+        help='Which landmark to use for demo (default: Testudo)'
+    )
+    parser.add_argument(
+        '--model',
+        dest='model_path',
+        help='Path to FastSAM model (default: from FASTSAM_MODEL_PATH env or /app/models/FastSAM-x.pt)'
+    )
+    parser.add_argument(
+        '--output-dir', '-o',
+        dest='output_dir',
+        default='./Image_plots/',
+        help='Directory to save output plots (default: ./Image_plots/)'
+    )
+    parser.add_argument(
+        '--verbose', '-v',
+        action='store_true',
+        help='Show verbose output including raw API responses'
+    )
+
+    args = parser.parse_args()
+
+    # Determine image paths
+    if args.demo:
+        demo_set = DEMO_SETS[args.landmark]
+        # Adjust paths for Docker environment
+        base_path = '/app/landmark-tracking/' if os.path.exists('/app/landmark-tracking') else ''
+        ground_truth_path = os.path.join(base_path, demo_set['gt'])
+        test_image_path = os.path.join(base_path, demo_set['test'])
+        ref_distance = demo_set['ref']
+
+        print(f"\nRunning demo with {args.landmark} landmark")
+        print(f"  Ground truth: {ground_truth_path}")
+        print(f"  Test image:   {test_image_path}")
+        print(f"  Ref distance: {ref_distance}m")
+    elif args.ground_truth and args.test_image:
+        ground_truth_path = args.ground_truth
+        test_image_path = args.test_image
+        ref_distance = args.ref_distance
+    else:
+        parser.print_help()
+        print("\n" + "-" * 70)
+        print("Error: Provide --demo or both -g (ground truth) and -t (test image)")
+        sys.exit(1)
+
+    # Verify images exist
+    for img_path, desc in [(ground_truth_path, "Ground truth"), (test_image_path, "Test image")]:
+        if not os.path.exists(img_path):
+            print(f"Error: {desc} not found: {img_path}")
+            sys.exit(1)
+
+    # Run detection
+    try:
+        detector = LandmarkDetector(
+            ground_truth_image_path=ground_truth_path,
+            test_image_path=test_image_path,
+            fastsam_model_path=args.model_path,
+            save_image_plot_dir=args.output_dir,
+            ref_distance=ref_distance,
+            verbose=args.verbose
+        )
+        detector.run()
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
 
 if __name__ == '__main__':
-    # Get paths from environment variables or use defaults
-    ground_truth_image_path = os.environ.get('GROUND_TRUTH_IMAGE_PATH', 'Images/Iribe/2.jpg')
-    test_image_path = os.environ.get('TEST_IMAGE_PATH', 'Images/Iribe/1.jpg')
-
-    # API key is loaded from OPENAI_API_KEY environment variable
-    detector = LandmarkDetector(
-        ground_truth_image_path=ground_truth_image_path,
-        test_image_path=test_image_path
-    )
-    detector.run()
+    main()
 
