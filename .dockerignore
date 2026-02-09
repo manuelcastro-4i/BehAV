@@ -1,53 +1,12 @@
-# Git
 .git
-.gitignore
-
-# IDE
+.env
+.claude
 .vscode
-.idea
-*.swp
-*.swo
-
-# Python
+models/*.pt
+output/
 __pycache__
 *.pyc
-*.pyo
-*.pyd
-.Python
-*.so
-.eggs/
-*.egg-info/
-.pytest_cache/
-
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-
-# Models (mounted as volume)
-models/*.pt
-models/*.pth
-models/*.onnx
-
-# Output directories
-Image_plots/
-output/
-logs/
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Documentation (keep README)
-*.md
-!README.md
-!CLAUDE.md
-
-# Large files
-*.jpg
-*.jpeg
-*.png
-*.webp
-!behav-sys-arch.jpg
+TODO.md
+DOCKER_README.md
+CLAUDE.md
+README.md

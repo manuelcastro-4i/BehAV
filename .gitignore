@@ -1,0 +1,20 @@
+# Environment and secrets
+.env
+
+# Model weights (large binaries)
+models/*.pt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Docker output
+output/
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code
+.claude/
