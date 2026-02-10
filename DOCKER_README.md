@@ -38,7 +38,7 @@ wget -O models/FastSAM-x.pt https://huggingface.co/conrevo/Segment-Anything-A111
 | `instruction_decomposition` | `test` | No | No | Parses natural language instructions into components and behavioral costs |
 | `landmark_test` | `test` | No | No | Detects landmarks in images using FastSAM + GPT-4o Vision |
 | `behav` | default | Yes | Yes | MPC navigation planner with CLIPSeg behavioral cost maps |
-| `go2_sim` | default | Yes | Yes | Gazebo simulator with Go2 quadruped robot (WIP) |
+| `go2_sim` | default | Yes | Yes | Gazebo Harmonic simulator with Go2 robot (headless + noVNC) |
 | `landmark_detector` | `landmark` | Yes | Yes | ROS2 landmark detection node (requires `go2_sim`) |
 
 ---
@@ -184,7 +184,53 @@ LOCALIZATION
 
 ---
 
-## 3. BehAV Navigation Planner
+## 3. Go2 Simulator (Gazebo Harmonic)
+
+ROS2 Jazzy + Gazebo Harmonic simulator for the Go2 quadruped robot. Runs **headless by default** (no display needed) and optionally provides a **browser-based GUI via noVNC** — works on both Windows and Linux without X11 forwarding.
+
+**Note:** Uses ROS2 Jazzy (required by the `go2_ros2_sim_py` repo). Communication with `behav` (Humble) works via DDS, which is compatible across ROS2 distros.
+
+### Build
+
+```bash
+docker-compose build go2_sim
+```
+
+### Run (headless, default)
+
+```bash
+# Start simulator headless (no GUI)
+docker-compose up go2_sim
+
+# Verify topics are published
+docker-compose exec go2_sim bash -c "source /opt/ros/jazzy/setup.bash && ros2 topic list"
+```
+
+### Run (with noVNC GUI)
+
+```bash
+# Start with browser-based GUI
+ENABLE_VNC=true docker-compose up go2_sim
+
+# On Windows (PowerShell):
+$env:ENABLE_VNC="true"; docker-compose up go2_sim
+```
+
+Then open **http://localhost:6080** in your browser to see the Gazebo GUI.
+
+### Run (full stack)
+
+```bash
+# Start simulator + planner
+docker-compose up
+
+# With GUI
+ENABLE_VNC=true docker-compose up
+```
+
+---
+
+## 4. BehAV Navigation Planner
 
 The core navigation planner. Uses ROS2 Humble, CUDA 12.1, PyTorch, CLIPSeg and MPC optimization to generate trajectories from behavioral cost maps.
 
@@ -308,10 +354,10 @@ docker run --rm --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi
 +---------------+    +------------------+
 |   go2_sim     |    |     behav        |
 |---------------|    |------------------|
-| ROS2 Humble   |    | ROS2 Humble      |
-| Gazebo        |    | CUDA 12.1        |
-| Go2 URDF      |    | PyTorch+CLIPSeg  |
-| Camera Plugin |    | FastSAM + nlopt  |
+| ROS2 Jazzy    |    | ROS2 Humble      |
+| Gazebo Harm.  |    | CUDA 12.1        |
+| Headless/VNC  |    | PyTorch+CLIPSeg  |
+| noVNC :6080   |    | FastSAM + nlopt  |
 +---------------+    +------------------+
 
 Standalone (no ROS2):

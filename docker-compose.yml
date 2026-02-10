@@ -1,18 +1,17 @@
 services:
-  # Go2 Robot Simulator with Gazebo
+  # Go2 Robot Simulator with Gazebo Harmonic
+  # Runs headless by default. Set ENABLE_VNC=true for browser GUI at http://localhost:6080
   go2_sim:
     build:
       context: .
       dockerfile: docker/Dockerfile.go2_sim
     container_name: go2_simulator
     environment:
-      - DISPLAY=${DISPLAY:-:0}
+      - ENABLE_VNC=${ENABLE_VNC:-false}
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-      - QT_X11_NO_MITSHM=1
-    volumes:
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      - ${XAUTHORITY:-~/.Xauthority}:/root/.Xauthority:ro
+    ports:
+      - "6080:6080"
     networks:
       - ros2_net
     deploy:
@@ -26,7 +25,7 @@ services:
     tty: true
     # Healthcheck to verify simulator is ready
     healthcheck:
-      test: ["CMD", "ros2", "topic", "list"]
+      test: ["CMD", "bash", "-c", "source /opt/ros/jazzy/setup.bash && ros2 topic list"]
       interval: 10s
       timeout: 5s
       retries: 5
