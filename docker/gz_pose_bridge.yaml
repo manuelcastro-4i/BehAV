@@ -1,0 +1,37 @@
+# ros_gz_bridge config — started by sim_adapters.py inside go2_sim container
+# Bridges Gazebo topics to ROS2 (parameter_bridge format)
+
+# Ground-truth odometry from OdometryPublisher plugin
+- ros_topic_name: "/robot1/odom"
+  gz_topic_name: "/robot1/odom"
+  ros_type_name: "nav_msgs/msg/Odometry"
+  gz_type_name: "gz.msgs.Odometry"
+  direction: GZ_TO_ROS
+
+# RGB camera from camera_face sensor
+- ros_topic_name: "/robot1/camera/image_raw"
+  gz_topic_name: "/robot1/color/image_raw"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+
+# LiDAR scan (BehAV planner subscribes to /scan remapped from /robot1/scan)
+- ros_topic_name: "/robot1/scan"
+  gz_topic_name: "/robot1/scan"
+  ros_type_name: "sensor_msgs/msg/LaserScan"
+  gz_type_name: "gz.msgs.LaserScan"
+  direction: GZ_TO_ROS
+
+# Fallback: world dynamic poses for odometry (used if OdometryPublisher odom is empty)
+- ros_topic_name: "/world_robot_poses"
+  gz_topic_name: "/world/empty/dynamic_pose/info"
+  ros_type_name: "geometry_msgs/msg/PoseArray"
+  gz_type_name: "gz.msgs.Pose_V"
+  direction: GZ_TO_ROS
+
+# cmd_vel: from behav planner (via shared file bridge, Jazzy domain) → Gazebo VelocityControl plugin
+- ros_topic_name: "/robot1/cmd_vel"
+  gz_topic_name: "/robot1/cmd_vel"
+  ros_type_name: "geometry_msgs/msg/Twist"
+  gz_type_name: "gz.msgs.Twist"
+  direction: ROS_TO_GZ

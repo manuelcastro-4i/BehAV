@@ -13,7 +13,8 @@ from cv_bridge import CvBridge, CvBridgeError
 # from matplotlib import pyplot as plt
 
 # Message types
-from std_msgs.msg import Float32, Float32MultiArray, UInt32
+from std_msgs.msg import Float32, Float32MultiArray, UInt32, String
+import json
 from geometry_msgs.msg import Twist, PointStamped,Point, PoseArray, PoseStamped, Quaternion, Pose
 from nav_msgs.msg import OccupancyGrid, Odometry, GridCells
 from sensor_msgs.msg import LaserScan, CompressedImage, NavSatFix
@@ -265,18 +266,6 @@ class BehAV_Planner(Node):
         # Declare ROS2 parameters for Docker/containerized operation
         self._declare_parameters()
 
-        self.qos_profile  = QoSProfile(
-                                        reliability=QoSReliabilityPolicy.BEST_EFFORT,
-                                        history=QoSHistoryPolicy.KEEP_LAST,
-                                        depth=10
-                                        )
-
-        self.qos_profile_intensity  = QoSProfile(
-                                                reliability=QoSReliabilityPolicy.RELIABLE,
-                                                history=QoSHistoryPolicy.KEEP_LAST,
-                                                depth=10
-                                                )
-
         # GhostInit for Ghost Robotics robots (disabled by default for Go2)
         if self.get_parameter('enable_ghost_init').value:
             self.ghost_init = GhostInit()
@@ -286,6 +275,17 @@ class BehAV_Planner(Node):
 
     def _declare_parameters(self):
         """Declare all ROS2 parameters for containerized operation."""
+        self.qos_profile = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+        self.qos_profile_intensity = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+
         # Goal parameters (replaces input() calls)
         self.declare_parameter('publish_to_motors', True)
         self.declare_parameter('goal_radius', 5.0)
@@ -342,6 +342,11 @@ class BehAV_Planner(Node):
         # Publisher for combined overlaid image
         self.behav_costmap_publisher = self.create_publisher(Image, '/behav_costmap', 10)
         self.traj_image_pub = self.create_publisher(Image, '/traj_marked_image', 10)
+
+        self.config_sub = self.create_subscription(
+            String, '/behav_config', self._behav_config_callback, 10
+        )
+        self.get_logger().info("Listening for behavioral config on /behav_config")
 
         # Use ROS2 parameter instead of input()
         publish_to_motors = self.get_parameter('publish_to_motors').value
@@ -441,8 +446,8 @@ class BehAV_Planner(Node):
 
         self.cost_values = [0.05,0.95,0.48,0] #high means preferred regions (e.g., pavement), and low means avoiding regions
         self.behav_costmap = None
-        # Flag to control output publishing
-        self.publish_outputs = False
+        # Flag to control output publishing — tie to publish_to_motors parameter
+        self.publish_outputs = self.get_parameter('publish_to_motors').value
 
         # Trajectory projection params - use ROS2 parameters for camera intrinsics
         fx = self.get_parameter('camera_fx').value
@@ -829,7 +834,7 @@ class BehAV_Planner(Node):
             preds_resized = F.interpolate(preds.unsqueeze(1), size=(self.img_h, self.img_w), mode="bilinear", align_corners=False).squeeze(1).cpu().numpy()
 
             for i, pred_resized in enumerate(preds_resized):
-                mask = pred_resized > 0.1
+                mask = pred_resized > 0.03
                 combined_cost_map[mask] = pred_resized[mask] * 255 * self.cost_values[i]  # Update only segmented regions
 
             # Clip and convert cost map to 8-bit for visualization
@@ -922,6 +927,33 @@ class BehAV_Planner(Node):
         return marked_img, max_cost
 
 
+
+    def _behav_config_callback(self, msg: String):
+        """Update CLIPSeg prompts and goal from director node."""
+        try:
+            cfg = json.loads(msg.data)
+            if 'prompts' in cfg and 'costs' in cfg:
+                if len(cfg['prompts']) != len(cfg['costs']):
+                    self.get_logger().error(
+                        f"behav_config: prompts/costs length mismatch "
+                        f"({len(cfg['prompts'])} vs {len(cfg['costs'])})"
+                    )
+                else:
+                    self.prompts = cfg['prompts']
+                    self.cost_values = cfg['costs']
+                    self.get_logger().info(f"Updated CLIPSeg prompts: {self.prompts}")
+            if 'goal_radius' in cfg:
+                self.goal_radius = cfg['goal_radius']
+                self.goal_theta  = cfg.get('goal_theta', 0.0)
+                self.goal_delta  = cfg.get('goal_delta', 0.0)
+                self.received_final_goal_odom = False  # trigger recalculation
+                self.received_init_odom = False
+                self.get_logger().info(
+                    f"Updated goal: r={self.goal_radius}m "
+                    f"θ={self.goal_theta}° δ={self.goal_delta}°"
+                )
+        except Exception as e:
+            self.get_logger().error(f"behav_config parse error: {e}")
 
     def occupancy_map_callback(self, msg):
         self.cost_map = msg

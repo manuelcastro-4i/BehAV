@@ -37,6 +37,7 @@ RUN apt-get update && apt-get install -y \
     ros-humble-std-msgs \
     ros-humble-image-transport \
     ros-humble-rmw-cyclonedds-cpp \
+    ros-humble-foxglove-bridge \
     python3-colcon-common-extensions \
     && rm -rf /var/lib/apt/lists/*
 
@@ -81,7 +82,9 @@ RUN mkdir -p /app/models
 # Set environment variables
 ENV ROS_DOMAIN_ID=0
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-ENV PYTHONPATH=/app:/app/FastSAM:$PYTHONPATH
+ENV PYTHONPATH=/opt/ros/humble/local/lib/python3.10/dist-packages:/opt/ros/humble/lib/python3.10/site-packages:/app:/app/FastSAM:$PYTHONPATH \
+    LD_LIBRARY_PATH=/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib:$LD_LIBRARY_PATH \
+    AMENT_PREFIX_PATH=/opt/ros/humble
 
 # Copy entrypoint script
 COPY docker/entrypoint.sh /entrypoint.sh

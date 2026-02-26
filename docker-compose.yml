@@ -8,8 +8,14 @@ services:
     container_name: go2_simulator
     environment:
       - ENABLE_VNC=${ENABLE_VNC:-false}
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      # Isolated Jazzy domain — must NOT match Humble containers (0)
+      # This prevents Humble DDS from polluting Jazzy's type hash resolution,
+      # which was causing shared_bridge_writer to receive no odom data.
+      - ROS_DOMAIN_ID=99
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      # Software OpenGL so rviz2 doesn't SIGABRT on headless virtual display
+      - LIBGL_ALWAYS_SOFTWARE=1
+      - MESA_GL_VERSION_OVERRIDE=3.3
     ports:
       - "6080:6080"
     networks:
@@ -21,8 +27,22 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu, graphics, compute, utility]
+    volumes:
+      - ./docker/sim_adapters.py:/app/sim_adapters.py:ro
+      - ./docker/gz_pose_bridge.yaml:/app/gz_pose_bridge.yaml:ro
+      - ./docker/go2_sim_start.sh:/app/go2_sim_start.sh:ro
+      - ./docker/shared_bridge_writer.py:/app/shared_bridge_writer.py:ro
+      # Patched xacro: adds OdometryPublisher + VelocityControl plugins (no rebuild needed)
+      # Must be mounted at the INSTALLED path (used by xacro $(find go2_description))
+      - ./docker/go2_gazebo.xacro:/app/go2_sim/install/go2_description/share/go2_description/xacro/gazebo.xacro:ro
+      # Demo world: asphalt path, grass, obstacles, goal marker, trees
+      - ./docker/behav_demo.world:/app/go2_sim/install/gazebo_sim/share/gazebo_sim/world/empty.world:ro
+      # Patched launch: removes rviz2 which crashes headless (SIGABRT) and kills everything
+      - ./docker/launch_sim.launch.py:/app/go2_sim/install/gazebo_sim/share/gazebo_sim/launch/launch_sim.launch.py:ro
+      - shared_bridge:/shared
     stdin_open: true
     tty: true
+    command: ["bash", "/app/go2_sim_start.sh"]
     # Healthcheck to verify simulator is ready
     healthcheck:
       test: ["CMD", "bash", "-c", "source /opt/ros/jazzy/setup.bash && ros2 topic list"]
@@ -45,6 +65,7 @@ services:
     volumes:
       - ./models:/app/models:ro
       - ./config:/app/config:ro
+      - ./planning:/app/planning:ro
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     depends_on:
       go2_sim:
@@ -58,23 +79,131 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu, compute, utility]
-    # BehAV planner with topic remapping for Go2 simulator
+    command:
+      - python3
+      - /app/planning/behav-planner.py
+      - --ros-args
+      - -p
+      - goal_radius:=17.0
+      - -p
+      - goal_theta:=0.0
+      - -p
+      - goal_delta:=0.0
+      - -p
+      - publish_to_motors:=true
+      - -p
+      - camera_fx:=554.25
+      - -p
+      - camera_fy:=554.25
+      - -p
+      - camera_cx:=320.0
+      - -p
+      - camera_cy:=240.0
+      - -p
+      - camera_height:=0.35
+      - --remap
+      - /odom_lidar:=/robot1/odom
+      - --remap
+      - /camera/color/image_raw:=/robot1/camera/image_raw
+      - --remap
+      - /mcu/command/manual_twist:=/robot1/cmd_vel
+      - --remap
+      - /scan:=/robot1/scan
+
+  # Shared Bridge Reader - republishes odom+camera from /shared/ into Humble ROS2
+  # Runs as its own service to avoid shell scripting issues (no behav_start.sh)
+  bridge_reader:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.behav
+    container_name: behav_bridge_reader
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+    volumes:
+      - ./docker/shared_bridge_reader.py:/app/shared_bridge_reader.py:ro
+      - shared_bridge:/shared  # rw: also writes cmd_vel.json for go2_sim relay
+    depends_on:
+      go2_sim:
+        condition: service_healthy
+    networks:
+      - ros2_net
+    command: ["python3", "/app/shared_bridge_reader.py"]
+
+  # BehAV Director - Orchestration node (decomposes instruction → drives planner)
+  # Override instruction/goal at runtime:
+  #   docker exec -it behav_director python3 /app/planning/behav-director.py -i
+  # Or set BEHAV_INSTRUCTION in your .env file.
+  director:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.behav
+    container_name: behav_director
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+    volumes:
+      - ./config:/app/config:ro
+      - ./planning:/app/planning:ro
+    depends_on:
+      go2_sim:
+        condition: service_healthy
+    networks:
+      - ros2_net
+    stdin_open: true
+    tty: true
     command: >
-      python3 /app/planning/behav-planner.py
-      --ros-args
-      -p goal_radius:=5.0
-      -p goal_theta:=0.0
-      -p goal_delta:=0.0
-      -p publish_to_motors:=true
-      -p camera_fx:=554.25
-      -p camera_fy:=554.25
-      -p camera_cx:=320.0
-      -p camera_cy:=240.0
-      -p camera_height:=0.35
-      --remap /odom_lidar:=/robot1/odom
-      --remap /camera/color/image_raw:=/robot1/camera/image_raw
-      --remap /mcu/command/manual_twist:=/robot1/cmd_vel
-      --remap /scan:=/robot1/scan
+      python3 /app/planning/behav-director.py
+      --instruction "${BEHAV_INSTRUCTION:-Stay on the road and avoid the grass}"
+      --goal-radius ${BEHAV_GOAL_RADIUS:-17.0}
+      --goal-theta ${BEHAV_GOAL_THETA:-0.0}
+      --goal-delta ${BEHAV_GOAL_DELTA:-0.0}
+      --republish-interval 10.0
+
+  # Foxglove Bridge - exposes all ROS2 topics via WebSocket for Foxglove Studio
+  # Open Foxglove Studio → Connect → ws://localhost:8765
+  # Download: https://foxglove.dev/download
+  foxglove:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.behav
+    container_name: behav_foxglove
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+    ports:
+      - "8765:8765"
+    depends_on:
+      go2_sim:
+        condition: service_healthy
+    networks:
+      - ros2_net
+    command: >
+      ros2 launch foxglove_bridge foxglove_bridge_launch.xml
+      port:=8765
+      address:=0.0.0.0
+
+  # BehAV Image Viewer - browser-based live view of costmap + trajectory
+  # Open http://localhost:8080 in any browser (works on Windows/WSL/Mac)
+  viewer:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.behav
+    container_name: behav_viewer
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./docker/image_viewer.py:/app/image_viewer.py:ro
+    depends_on:
+      go2_sim:
+        condition: service_healthy
+    networks:
+      - ros2_net
+    command: python3 /app/image_viewer.py
 
   # Landmark Detector (optional, run separately)
   landmark_detector:
@@ -166,3 +295,6 @@ services:
 networks:
   ros2_net:
     driver: bridge
+
+volumes:
+  shared_bridge:
