@@ -38,6 +38,7 @@ RUN apt-get update && apt-get install -y \
     ros-humble-image-transport \
     ros-humble-rmw-cyclonedds-cpp \
     ros-humble-foxglove-bridge \
+    ros-humble-rviz2 \
     python3-colcon-common-extensions \
     && rm -rf /var/lib/apt/lists/*
 

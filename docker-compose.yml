@@ -13,8 +13,10 @@ services:
       # which was causing shared_bridge_writer to receive no odom data.
       - ROS_DOMAIN_ID=99
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-      # Software OpenGL so rviz2 doesn't SIGABRT on headless virtual display
-      - LIBGL_ALWAYS_SOFTWARE=1
+      # On Linux with a real display: set DISPLAY to open Gazebo GUI locally.
+      # On headless/Windows: keep software OpenGL so it doesn't SIGABRT.
+      - DISPLAY=${DISPLAY:-:0}
+      - LIBGL_ALWAYS_SOFTWARE=${LIBGL_ALWAYS_SOFTWARE:-1}
       - MESA_GL_VERSION_OVERRIDE=3.3
     ports:
       - "6080:6080"
@@ -40,6 +42,7 @@ services:
       # Patched launch: removes rviz2 which crashes headless (SIGABRT) and kills everything
       - ./docker/launch_sim.launch.py:/app/go2_sim/install/gazebo_sim/share/gazebo_sim/launch/launch_sim.launch.py:ro
       - shared_bridge:/shared
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
     stdin_open: true
     tty: true
     command: ["bash", "/app/go2_sim_start.sh"]
@@ -183,6 +186,27 @@ services:
       ros2 launch foxglove_bridge foxglove_bridge_launch.xml
       port:=8765
       address:=0.0.0.0
+
+  # RViz2 - Visualize BehAV topics (odom, camera, scan, costmap) on local display
+  # Linux only: run `xhost +local:docker` before starting, then:
+  #   docker-compose up go2_sim behav bridge_reader director rviz2
+  rviz2:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.behav
+    container_name: behav_rviz2
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - DISPLAY=${DISPLAY:-:0}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    depends_on:
+      go2_sim:
+        condition: service_healthy
+    networks:
+      - ros2_net
+    command: ros2 run rviz2 rviz2
 
   # BehAV Image Viewer - browser-based live view of costmap + trajectory
   # Open http://localhost:8080 in any browser (works on Windows/WSL/Mac)
