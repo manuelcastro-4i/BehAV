@@ -1,6 +1,8 @@
+import json
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
+from std_msgs.msg import String
 from cv_bridge import CvBridge, CvBridgeError
 import requests
 import base64
@@ -40,7 +42,6 @@ class LandmarkDetectorNode(Node):
         self.get_logger().info('Started the Node.')
 
         # Parameters
-        self.declare_parameter('ground_truth_image_path', 'Images/Iribe/2.jpg')
         self.declare_parameter('image_topic', '/camera/color/image_raw')
         self.declare_parameter('fastsam_model_path', '/app/models/FastSAM-x.pt')
         self.declare_parameter('save_image_plot_dir', './Image_plots/')
@@ -54,23 +55,32 @@ class LandmarkDetectorNode(Node):
             self.get_logger().error(str(e))
             raise
 
-        self.ground_truth_image_path = self.get_parameter('ground_truth_image_path').get_parameter_value().string_value
         self.image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
         fastsam_model_path = self.get_parameter('fastsam_model_path').get_parameter_value().string_value
         self.save_image_plot = self.get_parameter('save_image_plot_dir').get_parameter_value().string_value
         timer_period = self.get_parameter('timer_period').get_parameter_value().double_value
 
+        # Landmark description received from /behav_config (set by the director)
+        self.landmark_description = None
+
         self.timer = self.create_timer(timer_period, self.timer_callback)
         self.latest_image = None
         self.is_processing = False
 
-        # Initialize subscriber
+        # Initialize publishers and subscribers
         self.publisher = self.create_publisher(Image, '/processed_image', 1)
+        self.behav_config_pub = self.create_publisher(String, '/behav_config', 10)
         self.subscription = self.create_subscription(
             Image,
             self.image_topic,
             self.image_callback,
             1
+        )
+        self.behav_config_sub = self.create_subscription(
+            String,
+            '/behav_config',
+            self._behav_config_callback,
+            10
         )
         self.bridge = CvBridge()
 
@@ -323,6 +333,18 @@ class LandmarkDetectorNode(Node):
                 Y = coordinates[1] 
                 circled_img = self.plot_dot_on_image(image, X, Y )
                 # print(f"The pixel location of the target [X ={X}, Y = {Y}]")
+                # Publish estimated distance as goal_radius to the planner
+                try:
+                    distance_meters = float(re.search(r'[\d.]+', distance_number).group())
+                    goal_msg = String()
+                    goal_msg.data = json.dumps({'goal_radius': distance_meters})
+                    self.behav_config_pub.publish(goal_msg)
+                    self.get_logger().info(
+                        f"Landmark detected — published goal_radius={distance_meters}m to /behav_config"
+                    )
+                except Exception as e:
+                    self.get_logger().warn(f"Could not parse landmark distance '{distance_number}': {e}")
+
                 if self.image_plot:
                     self.save_images(image,masked_image,circled_img, target_mask_number,distance_number )
                     self.publish_processed_image(circled_img)

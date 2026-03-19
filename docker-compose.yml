@@ -112,6 +112,12 @@ services:
       - /mcu/command/manual_twist:=/robot1/cmd_vel
       - --remap
       - /scan:=/robot1/scan
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f behav-planner.py > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
   # Shared Bridge Reader - republishes odom+camera from /shared/ into Humble ROS2
   # Runs as its own service to avoid shell scripting issues (no behav_start.sh)
@@ -132,6 +138,12 @@ services:
     networks:
       - ros2_net
     command: ["python3", "/app/shared_bridge_reader.py"]
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f shared_bridge_reader.py > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   # BehAV Director - Orchestration node (decomposes instruction → drives planner)
   # Override instruction/goal at runtime:
@@ -158,11 +170,17 @@ services:
     tty: true
     command: >
       python3 /app/planning/behav-director.py
-      --instruction "${BEHAV_INSTRUCTION:-Stay on the road and avoid the grass}"
+      --wait
       --goal-radius ${BEHAV_GOAL_RADIUS:-17.0}
       --goal-theta ${BEHAV_GOAL_THETA:-0.0}
       --goal-delta ${BEHAV_GOAL_DELTA:-0.0}
       --republish-interval 10.0
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8889/health', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   # Foxglove Bridge - exposes all ROS2 topics via WebSocket for Foxglove Studio
   # Open Foxglove Studio → Connect → ws://localhost:8765
@@ -186,6 +204,12 @@ services:
       ros2 launch foxglove_bridge foxglove_bridge_launch.xml
       port:=8765
       address:=0.0.0.0
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/8765' 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   # RViz2 - Visualize BehAV topics (odom, camera, scan, costmap) on local display
   # Linux only: run `xhost +local:docker` before starting, then:
@@ -207,6 +231,12 @@ services:
     networks:
       - ros2_net
     command: ros2 run rviz2 rviz2
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f rviz2 > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   # BehAV Image Viewer - browser-based live view of costmap + trajectory
   # Open http://localhost:8080 in any browser (works on Windows/WSL/Mac)
@@ -218,18 +248,28 @@ services:
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - DIRECTOR_API_URL=http://director:8889
     ports:
       - "8080:8080"
     volumes:
       - ./docker/image_viewer.py:/app/image_viewer.py:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
       go2_sim:
         condition: service_healthy
     networks:
       - ros2_net
     command: python3 /app/image_viewer.py
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
-  # Landmark Detector (optional, run separately)
+  # Landmark Detector - uses FastSAM + GPT-4 Vision to detect the goal landmark
+  # and publish its estimated distance as goal_radius to /behav_config
+  # Set LANDMARK_IMAGE to the ground-truth image path inside the container
   landmark_detector:
     build:
       context: .
@@ -242,7 +282,7 @@ services:
     volumes:
       - ./models:/app/models:ro
       - ./config:/app/config:ro
-      - ./landmark-tracking/Images:/app/landmark-tracking/Images:ro
+      - ./landmark-tracking:/app/landmark-tracking:ro
     depends_on:
       go2_sim:
         condition: service_healthy
@@ -255,13 +295,18 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu, compute, utility]
-    profiles:
-      - landmark  # Only starts with --profile landmark
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f landmark_detector_ROS2.py > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     command: >
       python3 /app/landmark-tracking/landmark_detector_ROS2.py
       --ros-args
       -p fastsam_model_path:=/app/models/FastSAM-x.pt
       -p image_topic:=/robot1/camera/image_raw
+      -p ground_truth_image_path:=${LANDMARK_IMAGE:-Images/Iribe/2.jpg}
 
   # Instruction Decomposition - Lightweight test service (no ROS2, no GPU)
   # Usage:

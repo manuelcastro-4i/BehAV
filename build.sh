@@ -28,7 +28,7 @@ case "${1:-}" in
   *)
     # Default: behav image (planner, director, bridge_reader, viewer all use it)
     print_header "Building behav image..."
-    docker-compose build behav
+    docker compose build behav
     ;;
 esac
 

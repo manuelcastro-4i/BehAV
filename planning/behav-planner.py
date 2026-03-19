@@ -333,7 +333,7 @@ class BehAV_Planner(Node):
         self.odom_msg = None
 
         self.sub_odom = self.create_subscription(Odometry, '/odom_lidar', self.assignOdomCoords,self.qos_profile)
-        # self.scan_subscriber = self.create_subscription(LaserScan,'/scan', self.scan_callback, self.qos_profile)
+        self.scan_subscriber = self.create_subscription(LaserScan,'/scan', self.scan_callback, self.qos_profile)
 
         # self.sub_odom = self.create_subscription(Odometry, '/odom', self.assignOdomCoords,self.qos_profile)
         # self.sub_cost_map = self.create_subscription(GridCells, '/costmap_translator/obstacles', self.config.occupancy_map_callback,self.qos_profile)
@@ -411,7 +411,9 @@ class BehAV_Planner(Node):
 
         #weighting factors for the objective function
         self.goal_factor = 1
-        self.goal_angle_factor = 3 
+        self.goal_angle_factor = 3
+        self.behav_weight = 300.0      # scales expected_behav to dominate expected_progress (~100-300)
+        self.collision_weight = 500.0  # exponential penalty per trajectory step near an obstacle
 
         # Cost function parameters
         self.C1 = 0.05
@@ -615,7 +617,15 @@ class BehAV_Planner(Node):
         # Get behavioral costs (assuming this function is optimized)
         traj_marked_img, max_behav_cost = self.get_traj_behav_cost(robot_frame_trajectory)
 
-        expected_behav += (max_behav_cost / 255) #normalizing the cost to 0-1 range
+        expected_behav += self.behav_weight * (max_behav_cost / 255)  # scaled to compete with expected_progress
+
+        # Collision cost: exponential penalty for each trajectory step close to a lidar obstacle
+        # normalized_distance in [0,1] where 0=touching obstacle, 1=at sensing_range
+        if self.obstacles_odom:
+            distances = self.get_distances_to_obstacles(trajectory, self.obstacles_odom)
+            expected_collision = self.collision_weight * sum(
+                math.exp(-d / self.SIGMA) for d in distances
+            )
 
         # Sum the costs
         total_cost = expected_collision + expected_progress + expected_action + expected_behav
